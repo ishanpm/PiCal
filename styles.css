@@ -1,0 +1,13 @@
+.bytecode-instr {
+  margin: 0.2em;
+  padding: 0em 0.1em;
+  background-color: #ddd;
+}
+
+.bytecode-instr.null {
+  color: #888;
+}
+
+.bytecode-instr.active {
+  background-color: #cfc; 
+}

@@ -8,10 +8,11 @@ p -> i:*             {% id %}
 i -> "+" _ n cc                  {% a => [a[0],a[2],a[3]] %} # Read
    | "!" _ n cc                  {% a => [a[0],a[2],a[3]] %} # Replicated read
    | "-" _ c cc                  {% a => [a[0],a[2],a[3]] %} # Write
-   | "*" _ n cc                  {% a => [a[0],a[2],a[3]] %} # New channel / Alias
+   | "*" _ n                     {% a => [a[0],a[2]] %}      # New channel
+   | "*" _ n ":" c               {% a => ["*:",a[2],a[4]] %} # Alias
    | "(" _ p ")" _               {% a => [a[0],a[2]] %}      # Fork
    | "{" _ fprefix fargs:* "}" _ {% a => [a[0],a[2],a[3]] %} # Function shorthand
-   | "<" sysname ">" _           {% a => [a[0],a[1]] %} # System directive
+   | "<" sysname ">" _           {% a => [a[0],a[1]] %}      # System directive
 
 # Function shorthand
 fprefix ->               c   {% a => [true, null,a[0]] %}
@@ -22,11 +23,15 @@ fargs   -> "+" _ n           {% a => [a[0],a[2]] %}
 
 # Expression shorthand
 eprefix -> null              {% a => null %}
-         | n "|" _           {% a => a[0] %}
+         | c "|" _           {% a => a[0] %}
          
 # Uneval. Expression shorthand
-uprefix -> null                                  {% a => [null,null,[]  ] %}
-         | ("*" _ n):? ("!" _ n):? fargs:* "|" _ {% a => [a[0],a[1],a[2]] %}
+uprefix -> null                          {% a => [null,null,[],[null]] %}
+         | ("*" _ n {% a=> a[2]  %}):?
+           ("!" _ n {% a=> a[2]  %}):?
+           ("+" _ n {% a=> a[2]  %}):*
+           ("-" _ c {% a=> a[2]  %}):*
+           "|" _                         {% a => [a[0],a[1],a[2],a[3]] %}
 
 # Optional channel with colon
 cc -> null                    {% a => null %}

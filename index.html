@@ -1,9 +1,38 @@
 <html>
 <head>
+<script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
 <script src="nearley.js"></script>
 <script src="grammar.js"></script>
 <script src="pilanguage.js"></script>
+<script src="frontend.js"></script>
+
+<link rel="stylesheet" href="styles.css"/>
 </head>
 <body>
+
+<div id="app">
+  <textarea v-model="source" style="width:50em; height:15em;"></textarea><br/>
+  <button v-on:click="doCompile">Compile</button><br><br>
+  <div v-if="env">
+    <button v-on:click="env.stepAll()">Step all</button>
+    <ul>
+      <li v-for="(ev,evindex) in env.evaluators" v-bind:key="ev.name">
+        <h3>{{ev.name}}</h3>
+        <button v-on:click="ev.step()">Step</button>
+        <div v-if="ev.error">Error: {{ev.error}}</div>
+        <div v-if="ev.blocking">(awaiting {{ev.blockType}})</div>
+        <div v-if="ev.halt">(halted)</div>
+        <div>
+          <span v-for="(cmd,index) in ev.program"
+                class="bytecode-instr"
+                v-bind:class="{active: index===ev.index, null: cmd===null}"
+          >{{cmd===null ? "&varnothing;" : cmd}}</span>
+        </div>
+      </li>
+    </li>
+  </div>
+  <p v-else>No program loaded.</p>
+</div>
+
 </body>
 </html>

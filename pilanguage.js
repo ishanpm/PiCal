@@ -6,65 +6,121 @@ function parse(program) {
   return parser.results[0];
 }
 
+function compile(program) {
+  return postprocess(parse(program));
+}
+
 // Postprocess program
-// Intermediate representation has additional
-// commands for function and expression shorthand
+// Intermediate representation uses RPN-style stack,
+// arguments are pushed LTR
 function postprocess(program) {
   let result = [];
   
-  function processInput(input,slot) {
-    if ((typeof(input) == "number" || typeof(input) == "string")) {
-      return input;
-    } else {
+  // Add an LValue (a name which can be assigned to) to the result
+  function processLval(input, result) {
+    result.push("&");
+    result.push(input);
+  }
+  
+  // Add an RValue (an expression which can be read from) to the result
+  function processRval(input, result) {
+    if (input === null || typeof(input) == "number" || typeof(input) == "string") {
+      result.push("=");
+      result.push(input);
+    } else if (input[0] == "[") {
       // Expression shorthand
-      result.push(["<"]);
-      processExpression(input);
-      result.push([">",slot]);
+      processSequence(input[2], result)
+      processRval(input[1], result)
+    } else if (input[0] == "[[") {
+      // Unevaluated expression shorthand
+      let sig = input[1];
+      let selfName = sig[0] // ? sig[0][0] : null
+      let ioName   = sig[1] // ? sig[1][0] : null
+      let subprogram = []
       
-      return "<"+slot;
+      processLval(selfName, subprogram)
+      processLval(ioName, subprogram)
+      
+      subprogram.push("[[*") //, sig[0] != null, input[1] != null)
+      
+      for (let subinp of sig[2]) {
+        processLval(subinp, subprogram)
+        subprogram.push("{+")
+      }
+      
+      processSequence(input[2], subprogram);
+      
+      for (let subout of sig[3]) {
+        processRval(subout, subprogram)
+        subprogram.push("{-")
+      }
+      
+      subprogram.push("}")
+      
+      result.push("[[");
+      result.push(subprogram);
     }
   }
   
-  function processInstruction(expr) {
-    if (expr[0] == "+" || expr[0] == "!") {
-      // Read
-      let i1 = processInput(expr[1],1);
-      result.push([expr[0],i1,expr[2]]);
+  // Add an instruction and its arguments to the result
+  function processInstruction(expr, result) {
+    if (expr[0] == "+" || expr[0] == "!" || expr[0] == "*:") {
+      // Read, replicated read, new, alias
+      processLval(expr[1], result);
+      processRval(expr[2], result);
+      result.push(expr[0]);
     } else if (expr[0] == "-") {
       // Write
-      let i1 = processInput(expr[1],1);
-      let i2 = processInput(expr[2],2);
-      result.push([expr[0],i1,i2]);
+      processRval(expr[1], result);
+      processRval(expr[2], result);
+      result.push(expr[0]);
     } else if (expr[0] == "*") {
-      // New channel
-      result.push([expr[0],expr[1]]);
+      // New
+      processLval(expr[1], result);
+      result.push(expr[0]);
     } else if (expr[0] == "(") {
       // Branch
-      result.push([expr[0],expr[1]]);
+      result.push(expr[0]);
+      let subprogram = [];
+      processSequence(expr[1], subprogram)
+      result.push(subprogram);
     } else if (expr[0] == "{") {
       // Function shorthand
-      let i1 = processInput(expr[1],1);
-      result.push(["{",i1]);
+      let createNewIO = expr[1][0]
+      let ioName      = expr[1][1]
+      let funcName    = expr[1][2]
+      
+      if (createNewIO) {
+        processLval(ioName, result)
+      } else {
+        processRval(ioName, result)
+      }
+      processRval(funcName, result)
+      result.push("{", createNewIO);
+      
       for (let a of expr[2]) {
         if (a[0] == "+") {
-          result.push([a[0],"*",a[1]]);
+          processLval(a[1], result)
+          result.push("{+")
         } else if (a[0] == "-") {
-          let a1 = processInput(a[1]);
-          result.push([a[0],"*",a1]);
+          processRval(a[1], result)
+          result.push("{-")
         }
       }
-      result.push(["}"]);
+      result.push("}");
+    } else if (expr[0] == "<") {
+      result.push(expr[0], expr[1])
     }
   }
   
-  function processExpression(expr) {
-    for (let i of expr) {
-      processInstruction(i);
+  // Add an entire program to the result
+  function processSequence(seq, result) {
+    for (let i of seq) {
+      processInstruction(i, result);
     }
   }
   
-  parsed = parse(program);
-  processExpression(parsed);
+  processSequence(program, result);
   
   return result;
 }
@@ -86,18 +142,62 @@ class AbstractChannel {
   
   addRef(obj) {
     this.refCount++;
+    
+    if (this.refCount > 0) this.closed = false;
   }
   
   removeRef(obj) {
     this.refCount--;
+    
+    if (this.refCount == 0) this.closed = true;
   }
   
-  read(rcall) {
+  read(reader) {
     throw new TypeError("Can't read from channel");
   }
   
-  write(val, wcall) {
+  write(val, writer) {
     throw new TypeError("Can't write to channel");
+  }
+  
+  toString() {
+    if (this.val) {
+      return `Channel(${this.val})`
+    } else {
+      return `Channel`
+    }
+  }
+}
+
+class ConstantChannel extends AbstractChannel {
+  constructor(root, val) {
+    super(root);
+    this.val = val;
+  }
+}
+
+class FunctionChannel extends AbstractChannel {
+  constructor(root, callback) {
+    super(root);
+    this.arity = callback.length;
+    this.callback = callback;
+  }
+  
+  write(io, writer) {
+    let arity = this.arity;
+    let callback = this.callback;
+    let readHandler = {args: [], onRead: function(arg) {
+      this.args.push(arg);
+      
+      if (this.args.length == arity) {
+        io.write(callback.apply(null, this.args), readHandler)
+      } else {
+        io.read(readHandler)
+      }
+    }, onWrite: function() {}}
+    io.read(readHandler);
+    
+    writer.onWrite();
   }
 }
 
@@ -109,52 +209,36 @@ class Channel extends AbstractChannel {
     this.writes = [];
   }
   
-  read(rcall) {
+  read(reader) {
     if (this.writes.length > 0) {
       this.refCount++;
-      let wcall = this.writes.pop();
+      let writer = this.writes.pop();
       let val = this.writeVals.pop();
       
-      rcall(val);
-      wcall();
+      reader.onRead(val);
+      writer.onWrite();
     } else {
       this.refCount--;
-      this.reads.push(rcall);
+      this.reads.push(reader);
     }
   }
   
-  write(val, wcall) {
+  write(val, writer) {
     if (this.reads.length > 0) {
       this.refCount++;
-      let rcall = this.reads.pop();
+      let reader = this.reads.pop();
       
-      rcall(val);
-      wcall();
+      reader.onRead(val);
+      writer.onWrite();
+      
+      if (reader.infinite) {
+        this.read(reader);
+      }
     } else {
       this.refCount--;
-      this.writes.push(wcall);
-      this.writeVals.pop(val);
+      this.writes.push(writer);
+      this.writeVals.push(val);
     }
-  }
-}
-
-class VarStore {
-  constructor() {
-    // Stores vars in the order they were created
-    this.vars = [];
-    // Map from var name to value
-    this.names = Object.create(null);
-    this.varFrame = [];
-    this.nameStack = [];
-  }
-  
-  clone() {
-    // TODO
-    let other = new VarStore();
-    other.vars = this.vars.map(e => e);
-    other.names = copyObj(this.names);
-    other.varFrame = this.varFrame.map(e => e);
-    other.nameStack = this.nameStack.map(e => e);
   }
 }
 
@@ -163,10 +247,12 @@ class Evaluator {
     this.root = root;
     this.program = program;
     this.index = index || 0;
+    this.name = "0";
     this.vars = [];
     this.names = {};
-    this.varFrame = [];
-    this.nameStack = [];
+    this.stack = [];
+    this.childCount = 0;
+    this.cloneCount = 0;
     
     this.blocking = null;
     this.blockType = null;
@@ -178,55 +264,107 @@ class Evaluator {
   
   clone() {
     let other = new Evaluator(this.root,this.program,this.index);
+    other.name = `${this.name}:${this.cloneCount}`
     
-    other.vars = this.vars.map(e => e);
+    other.vars = this.vars.map(e => ((e.addRef(this)),e));
     other.names = copyObj(this.names);
-    other.varFrame = this.varFrame.map(e => e);
-    other.nameStack = this.nameStack.map(e => e);
+    other.stack = this.stack.map(e => ((e.addRef ? e.addRef(this) : null),e));
     
     other.blocking = this.blocking;
     other.blockType = this.blockType;
     other.error = this.error;
     other.halt = this.halt;
     
-    for (let c of other.vars) {
-      c.addRef(other);
-    }
+    this.cloneCount++
+    
+    return other;
+  }
+  
+  makeChild(program, index) {
+    let other = new Evaluator(this.root,program,index);
+    other.name = `${this.name}.${this.childCount}`
+    
+    other.vars = this.vars.map(e => ((e.addRef(this)),e));
+    other.names = copyObj(this.names);
+    
+    this.childCount++;
     
     return other;
   }
   
   step() {
-    if (this.index >= this.program.length) this.halt = true;
+    if (!this.blocking && this.index >= this.program.length) this.halt = true;
     
-    if (this.halt) return true;
+    if (this.halt) {
+      if (this.root) {
+        this.root.cullEvaluator(this)
+      }
+      return this.halt;
+    }
     
-    let instr = this.program[this.index];
+    if (this.blocking) {
+      if (this.blocking.closed) {
+        this.halt = true
+      }
+      return this.blockType;
+    }
     
-    switch (instr[0]) {
+    let instr = this.getNext();
+    
+    switch (instr) {
+      case "=": // Reference
+        this.push(this.getVar(this.getNext())); break;
+      case "&": // Literal
+        this.push(this.getNext()); break;
       case "+":
-        this.i_read(instr[1],instr[2]); break;
+        this.i_read         (this.pop(),this.pop()); break;
       case "!":
-        this.i_repRead(instr[1],instr[2]); break;
+        this.i_repRead      (this.peek(0),this.peek(1)); break;
       case "-":
-        this.i_write(instr[1],instr[2]); break;
+        this.i_write        (this.pop(),this.pop()); break;
       case "*":
-        this.i_newChannel(instr[1]); break;
+        this.i_newChannel   (this.pop(),this.pop()); break;
+      case "*:":
+        this.i_alias        (this.pop(),this.pop()); break;
       case "(":
-        this.i_branch(instr[1]); break;
+        this.i_branch       (this.getNext()); break;
       case "{":
-        this.i_enterFunction(instr[1]); break;
+        this.i_enterFunction(this.pop(),this.pop(),this.getNext()); break;
+      case "{+":
+        this.i_read         (this.peek(1),this.pop()); break;
+      case "{-":
+        this.i_write        (this.peek(1),this.pop()); break;
       case "}":
-        this.i_exitFunction(); break;
+        this.i_exitFunction (); break;
+      case "[[":
+        this.i_enterUneval  (this.getNext()); break;
+      case "[[*":
+        this.i_beginUneval  (this.pop(),this.pop(),this.pop()/*,this.getNext(), this.getNext()*/); break;
       case "<":
-        this.i_enterExpr(); break;
-      case ">":
-        this.i_exitExpr(instr[1]); break;
+        this.i_systemCall   (this.getNext()); break;
       default:
-        this.raiseError(`Unrecognized opcode ${instr[1]}`);
+        this.raiseError(`Unrecognized opcode ${instr}`);
     }
     
     return this.halt || this.blockType;
+  }
+  
+  peek(n) {return this.stack[this.stack.length-1-n]}
+  
+  pop() {
+    let val = this.stack.pop();
+    if (val instanceof AbstractChannel) val.removeRef(this);
+    return val;
+  }
+  
+  push(val) {
+    if (val instanceof AbstractChannel) val.addRef(this);
+    this.stack.push(val)
+  }
+  
+  // Return current instruction then increment ip
+  getNext() {
+    return this.program[this.index++];
   }
   
   // Returns a channel given index or name
@@ -235,7 +373,7 @@ class Evaluator {
       if (name < this.vars.length) {
         // Numbered channel
         return this.vars[this.vars.length-1-name];
-        raiseError("Can't find numbered channel "+name);
+        this.raiseError("Can't find numbered channel "+name);
       }
     } else if (typeof(name) == "string") {
       if (this.names[name]) {
@@ -247,14 +385,14 @@ class Evaluator {
         if (spec) {
           return spec;
         } else {
-          raiseError("Can't find named channel "+name);
+          this.raiseError("Can't find named channel "+name);
         }
       }
     } else if (name === null) {
       if (this.vars.length > 0) {
         return this.vars[this.vars.length-1];
       } else {
-        raiseError("Can't find numbered channel 0");
+        this.raiseError("Can't find numbered channel 0");
       }
     }
     
@@ -272,130 +410,123 @@ class Evaluator {
   
   i_read(channel, name) {
     if (!this.blocking) {
-      channel = this.getVar(channel);
       this.blocking = channel;
       this.blockType = "read";
       
       let that = this;
-      channel.read(function(value) {
+      channel.read({onRead: function(value) {
         that.blocking = null;
         that.blockType = null;
         that.addVar(name,value);
-        that.index++;
-      });
+      }});
+    } else {
+      this.raiseError("Attempt to read while already blocked")
     }
   }
   
   i_repRead(channel, name) {
     if (!this.blocking) {
-      channel = this.getVar(channel);
       this.blocking = channel;
-      this.blockType = "read";
+      this.blockType = "repread";
       
       let that = this;
-      channel.read(function(value) {
-        that.blocking = null;
-        that.blockType = null;
-        let clone = that.clone();
-        clone.addVar(name,value);
-        clone.index++;
-      });
+      let readHandler = {infinite: true, onRead: function(value) {
+        let child = that.clone();
+        child.blocking = null;
+        child.blockType = null;
+        child.addVar(name,value);
+      }}
+      
+      channel.read(readHandler);
+    } else {
+      this.raiseError("Attempt to rep. read while already blocked")
     }
   }
   
   i_write(channel, value) {
     if (!this.blocking) {
-      channel = this.getVar(channel);
-      value = this.getVar(value);
       this.blocking = channel;
       this.blockType = "write";
       
       let that = this;
-      channel.write(value, function() {
+      channel.write(value, {onWrite: function() {
         that.blocking = null;
         that.blockType = null;
-        that.index++;
-      });
+      }});
     }
   }
   
   i_newChannel(name) {
-    let newc = new Channel(this.root);
-    this.addVar(name, newc);
-    this.index++;
+    this.addVar(name, new Channel(this.root));
+  }
+  
+  i_alias(orig, name) {
+    this.addVar(name, orig);
   }
   
   i_branch(prog) {
-    let clone = this.clone();
-    clone.program = prog;
-    clone.index = 0;
-    this.index++;
+    let child = this.makeChild(prog,0);
   }
   
-  i_enterFunction(channel) {
-    let newc = new Channel(this.root);
-    this.names["*"] = newc;
-    newc.addRef(this);
-    this.index++;
+  i_enterFunction(func, io, createNewIO) {
+    let ioChannel;
+    if (createNewIO) {
+      // io is an lvalue, assign to it
+      ioChannel = new Channel(this.root);
+      this.addVar(io, ioChannel)
+    } else {
+      // io is an rvalue, use it
+      ioChannel = io;
+    }
+    this.push(ioChannel);
+    
+    this.i_write(func, ioChannel)
   }
   
   i_exitFunction() {
-    this.names["*"].removeRef(this);
-    delete this.names["*"];
-    this.index++;
+    this.pop();
   }
   
-  i_enterExpr() {
-    this.nameStack.push(this.names);
-    this.varFrame.push(this.vars.length);
-    this.names = copyObj(this.names);
-    
-    // Don't push expr return value
-    // because it might get dereferenced by inner scope
-    // and it isn't accessible anyway
-    delete this.names["<1"];
-    delete this.names["<2"];
-    
-    this.index++;
+  i_enterUneval(prog) {
+    let newc = new Channel(this.root);
+    let child = this.makeChild(prog,0);
+    child.push(newc);
+    this.push(newc);
   }
   
-  i_exitExpr(slot) {
-    // Determine return value
-    let ret;
-    if (this.names["$"]) {
-      ret = this.names["$"];
-    } else if (this.vars.length > 0) {
-      ret = this.vars[this.vars.length-1];
+  i_beginUneval(ioName, selfName, self/*, showSelf, showIO*/) {
+    //if (showSelf) {
+    this.addVar(selfName,self);
+    // }
+    
+    if (!this.blocking) {
+      this.blocking = self;
+      this.blockType = "repread";
+      
+      let that = this;
+      let readHandler = {infinite: true, onRead: function(ioChannel) {
+        let child = that.clone();
+        child.blocking = null;
+        child.blockType = null;
+        //if (showIO) {
+        child.addVar(ioName,ioChannel);
+        // }
+        child.push(ioChannel)
+      }};
+      
+      self.read(readHandler);
     } else {
-      this.raiseError("No channels defined when exiting subexpression");
-      return;
+      this.raiseError("Attempt to rep. read while already blocked")
     }
-    
-    // Remove references to out of scope channels
-    for (let i=this.varFrame[this.varFrame.length-1]; i<this.vars.length; i++) {
-      this.vars[i].removeRef(this);
-    }
-    
-    // Restore previous scope
-    this.names = copyObject(this.nameStack.pop());
-    this.vars.splice(this.varFrame.pop());
-    
-    // Set return value
-    if (this.names["<"+slot])
-      this.names["<"+slot].removeRef(this);
-    this.names["<"+slot] = ret;
-    ret.addRef(this);
   }
   
-  pushScope() {
-    
-  }
-  
-  popScope() {
-    
+  i_syscall(syscall) {
+    console.log(syscall)
   }
   
   raiseError(message) {
+    console.warn(this)
+    console.warn(message)
     this.error = message;
     this.halt = true;
   }
@@ -405,14 +536,11 @@ class Evaluator {
       c.removeRef(this);
     }
     
-    // Expression return values aren't part of normal
-    // scope so they must be removed separately
-    if (this.names["<1"])
-      this.names["<1"].removeRef(this);
-    if (this.names["<2"])
-      this.names["<2"].removeRef(this);
-    
-    this.destroy = function() {};
+    this.vars = [];
+  }
+  
+  toString() {
+    return 
   }
 }
 
@@ -421,43 +549,97 @@ class MiniPi {
     this.program = program;
     this.channels = [];
     this.evaluators = [];
-    
-    this.inputChannel = new AbstractChannel(this);
-    this.outputChannel = new AbstractChannel(this);
+    this.specialChannels = Object.create(null);
     
     var that = this;
-    this.inputChannel.read = function(rcall) {
+    
+    let inputCh = new AbstractChannel(this);
+    inputCh.read = function(reader) {
       let val = +window.prompt("Input number")
       let ch = new AbstractChannel(that);
       ch.val = val;
-      rcall(ch);
+      reader.onRead(ch);
     }
-    this.outputChannel.write = function(val,wcall) {
+    this.specialChannels['i'] = inputCh
+    
+    let outputCh = new AbstractChannel(this);
+    outputCh.write = function(val,writer) {
       console.log(val.val);
-      wcall();
+      writer.onWrite();
+    }
+    this.specialChannels['o'] = outputCh
+    
+    this.specialChannels['plus']  = new FunctionChannel(this, (x,y) => new ConstantChannel(that,x.val+y.val))
+    this.specialChannels['minus'] = new FunctionChannel(this, (x,y) => new ConstantChannel(that,x.val-y.val))
+    this.specialChannels['lt']    = new FunctionChannel(this, (x,y) => that.specialChannels[x.val<y.val?'true':'false'])
+    this.specialChannels['true']  = new FunctionChannel(this, (x,y) => x)
+    this.specialChannels['true'].val = true
+    this.specialChannels['false'] = new FunctionChannel(this, (x,y) => y)
+    this.specialChannels['false'].val = false
+    
+    for (let c in this.specialChannels) {
+      this.specialChannels[c].addRef(this);
     }
   }
   
   getVar(name) {
-    if (name == "i") {
-      return this.inputChannel;
-    } else if (name == "o") {
-      return this.outputChannel;
+    if (name in this.specialChannels) {
+      return this.specialChannels[name];
     } else if (name[0] == "\"" && name[name.length-1] == "\"") {
-      let c = new AbstractChannel(this);
-      c.val = name.substr(1,name.length-2);
+      let c = new ConstantChannel(this,name.substr(1,name.length-2));
       return c;
+    } else if (name[0] == "#") {
+      var num = parseFloat(name.substr(1));
+      if (!isNaN(num)) {
+        return new ConstantChannel(this,num);
+      }
+    }
+  }
+  
+  stepOne() {
+    
+  }
+  
+  stepAll() {
+    let oldEvaluators = this.evaluators.map(e=>e)
+    
+    for (let ev of oldEvaluators) {
+      ev.step();
+    }
+  }
+  
+  run() {
+    let count = 100;
+    
+    console.log(`Running ${count} steps`)
+    
+    for (var i=0; i<count; i++) {
+      this.stepAll();
+    }
+  }
+  
+  cullChannels() {
+    this.channels = this.channels.filter(e => !e.closed)
+  }
+  
+  cullEvaluator(ev) {
+    if (ev.error) return;
+    
+    let i = this.evaluators.indexOf(ev);
+    if (i > -1) {
+      this.evaluators[i].destroy();
+      this.evaluators.splice(i,1);
     }
   }
 }
 
 MiniPi.interpret = function(str) {
   let obj = new MiniPi();
-  obj.program = postprocess(str);
+  obj.program = compile(str);
   new Evaluator(obj, obj.program);
   return obj;
 }
 
-let exports = {parse,postprocess,AbstractChannel,Channel,Evaluator,MiniPi};
+let exports = {parse,postprocess,compile,AbstractChannel,Channel,Evaluator,MiniPi};
 window.pilanguage = exports;
 })()
