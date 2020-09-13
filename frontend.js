@@ -6,7 +6,10 @@ let examples = {
   -:loop      // Send something to loop
 )
 
--:loop`,
+-:loop
+
+
+/* Click 'compile', then 'run', then type something in the input box and click 'send' */`,
 "while loop":
 `*var:[[!io|*val *v:[[!io|+:val -:io +:io -:val]] -v:io -[*]:val]]
 *get:[[+v-|{v+-}]]
