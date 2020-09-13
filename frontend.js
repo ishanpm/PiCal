@@ -24,7 +24,18 @@ let examples = {
   {set-x-[{plus-val-#1+}]}
 ]]+}
 -"Done":o`,
-"fibonacci":""
+"fibonacci":
+`*fibonacci:[[*fibonacci !io +n|
+  {[{[{lt-n-#2+}]-[[
+    -#1:io
+  ]]-[[
+    {*a| fibonacci-[{minus-n-#1+}]}
+    {*b| fibonacci-[{minus-n-#2+}]}
+    -[{plus-[+:a]-[+:b]+}]:io
+  ]]+}]+}
+]]
+
+{[[*r| +n:i {fibonacci-n+} -:o {r}]]}`
 }
 
 function runApp() {
@@ -34,7 +45,7 @@ function runApp() {
       source: examples["cat"],
       examples: examples,
       exampleName: "cat",
-      running: false,
+      speed: 0,
       env: null,
       inputValue: "",
       output: "",
@@ -83,8 +94,10 @@ function runApp() {
       },
       
       tick: function() {
-        if (this.running && this.env) {
-          this.env.stepAll();
+        if (this.env && this.speed>0 && isFinite(this.speed)) {
+          for (let i=0; i<this.speed; i++) {
+            this.env.stepAll();
+          }
         }
       }
     }

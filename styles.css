@@ -2,6 +2,10 @@
   font-family: monospace;
 }
 
+.active-button {
+  font-weight: bold;
+}
+
 .bytecode-instr {
   margin: 0.2em;
   padding: 0em 0.1em;

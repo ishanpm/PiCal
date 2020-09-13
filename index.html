@@ -49,7 +49,9 @@ comparison:           lt, le, gt, ge, eq, ne
     <input type="submit" value="Send">
   </form>
   <button v-on:click="doCompile">Compile</button>
-  <button v-on:click="running = !running">{{running ? "Pause" : "Run"}}</button>
+  <button v-bind:class="{'active-button': speed==0}"  v-on:click="speed = 0">Pause</button>
+  <button v-bind:class="{'active-button': speed==1}"  v-on:click="speed = 1">Run</button>
+  <button v-bind:class="{'active-button': speed==50}" v-on:click="speed = 50">Turbo</button>
   <br><br>
   <div v-if="env">
     <button v-on:click="env.stepAll()">Step all</button>
