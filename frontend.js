@@ -1,16 +1,103 @@
+let examples = {
+"cat":
+`*loop (!:loop // Whenever "loop" recieves something...
+  +val:i      // Read val from input
+  -val:o      // Write val to output
+  -:loop      // Send something to loop
+)
+
+-:loop`,
+"while loop":
+`*var:[[!io|*val *v:[[!io|+:val -:io +:io -:val]] -v:io -[*]:val]]
+*get:[[+v-|{v+-}]]
+*set:[[+v+val|{v+-val}]]
+*while:[[*while+cond+body-|{[{[{cond+}]-[[{body+}{while-cond-body+}]]-[[]]+}]+}]]
+
+{var+x}
+{set-x-#1}
+{while-[[{le-[{get-x+}]-#5+}]]-[[
+  {get-x+val}
+  -val:o
+  {set-x-[{plus-val-#1+}]}
+]]+}
+-"Done":o`,
+"fibonacci":""
+}
+
 function runApp() {
   window.app = new Vue({
     el: '#app',
     data: {
-      source: '+:i-:o',
-      env: null
+      source: examples["cat"],
+      examples: examples,
+      exampleName: "cat",
+      running: false,
+      env: null,
+      inputValue: "",
+      output: "",
+    },
+    watch: {
+      exampleName: function(value, oldValue) {
+        if (value in this.examples) {
+          this.source = this.examples[value];
+        }
+      },
+      
     },
     methods: {
       doCompile: function() {
-        this.env = pilanguage.MiniPi.interpret(this.source);
+        try {
+          this.env = pilanguage.MiniPi.interpret(this.source);
+          this.env.onOutput = this.pushOutput.bind(this)
+          this.output = "";
+        } catch (e) {
+          if (/^Syntax error at/.test(e.message)) {
+            // Nearley's error messages are descriptive, but a little long
+            this.output = e.message.split("\n").splice(0,4).join("\n")
+          } else {
+            this.output = e.message
+          }
+          console.error(e)
+        }
+      },
+      
+      pushOutput: function(val) {
+        this.output += val + "\n"
+        let container = this.$refs.outputContainer
+        container.scrollTop = container.scrollHeight;
+      },
+      
+      pushInput: function(val) {
+        if (!isNaN(parseFloat(val))) {
+          this.env.pushInput(parseFloat(val));
+        } else {
+          this.env.pushInput(val);
+        }
+      },
+      
+      sourceChanged: function() {
+        this.exampleName = "";
+      },
+      
+      tick: function() {
+        if (this.running && this.env) {
+          this.env.stepAll();
+        }
       }
     }
   })
 }
 
 window.onload = runApp;
+
+function loop() {
+  try {
+    if (app && app.tick) app.tick();
+  } catch (e) {
+    console.error(e);
+  }
+  
+  window.requestAnimationFrame(loop);
+}
+
+window.requestAnimationFrame(loop);

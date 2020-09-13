@@ -1,27 +1,27 @@
 Commands:
++x:c                  Read x from c
+!x:c                  Replicated read x from c
+*x                    Create a new channel x
+-x:c                  Write x to c
+(P)                   Fork P
+*x:y                  Alias y as x
+{f -i +o}             Function call shorthand: *io -:f -i:io +o:io
 
-```
-+x:c            Read from c and name the result x
-!x:c            Replicated read
-*x              Create a new channel x
--x:c            Write x to c
-(P)             Fork P
-```
-
-{f -i +o}             Function shorthand: *io -:f -i:io +o:io
-[P]                   Expression shorthand: Evaluates process and returns last channel
+Expressions:
+name                  Channel name (can't start with a number, must match ([\w#$]|"[^"]"|'[^']')*
+number                0 is most recently created channel
+[P]                   Expression shorthand: Evaluates process and returns last created channel
 [x|P]                 Expression shorthand: Evaluates process and returns channel named x
 [[P]]                 Unevaluated shorthand: [*(!r P -:r)]
 [[*self !io +i -o|P]] Unevaluated w/ signature: [*self(!io +i:r P -o:r)]
 
+
 Possible extensions:
 
 <cmd>                 Preprocessor command (such as require or import)
-[x|P]                 Expression shorthand w/ signature: Returns x instead of $
 {io|f -i +o}          Function w/ existing IO channel: -io:f -i:io +o:io
 {*io|f -i +o}         Function w/ exposed IO channel: *io -io:f -i:io +o:io
 +[P]:c                LValue expression: +$:c P (compared to RValue expression: +c:<P> ==> P +c:$)
-*x:y                  Alias shorthand: x is an alias for y
 
 Details of function/expression shorthand
 

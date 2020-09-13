@@ -184,17 +184,22 @@ class FunctionChannel extends AbstractChannel {
   }
   
   write(io, writer) {
+    let that = this;
     let arity = this.arity;
     let callback = this.callback;
+    
     let readHandler = {args: [], onRead: function(arg) {
       this.args.push(arg);
+      arg.addRef(that);
       
       if (this.args.length == arity) {
         io.write(callback.apply(null, this.args), readHandler)
       } else {
         io.read(readHandler)
       }
-    }, onWrite: function() {}}
+    }, onWrite: function() {
+      for (let a of this.args) a.removeRef(that);
+    }}
     io.read(readHandler);
     
     writer.onWrite();
@@ -211,21 +216,26 @@ class Channel extends AbstractChannel {
   
   read(reader) {
     if (this.writes.length > 0) {
-      this.refCount++;
+      this.addRef();
+      
       let writer = this.writes.pop();
       let val = this.writeVals.pop();
       
       reader.onRead(val);
       writer.onWrite();
+      
+      if (reader.infinite) {
+        this.read(reader);
+      }
     } else {
-      this.refCount--;
+      this.removeRef();
       this.reads.push(reader);
     }
   }
   
   write(val, writer) {
     if (this.reads.length > 0) {
-      this.refCount++;
+      this.addRef();
       let reader = this.reads.pop();
       
       reader.onRead(val);
@@ -235,7 +245,7 @@ class Channel extends AbstractChannel {
         this.read(reader);
       }
     } else {
-      this.refCount--;
+      this.removeRef();
       this.writes.push(writer);
       this.writeVals.push(val);
     }
@@ -268,7 +278,7 @@ class Evaluator {
     
     other.vars = this.vars.map(e => ((e.addRef(this)),e));
     other.names = copyObj(this.names);
-    other.stack = this.stack.map(e => ((e.addRef ? e.addRef(this) : null),e));
+    other.stack = this.stack.map(e => ((e&&e.addRef ? e.addRef(this) : null),e));
     
     other.blocking = this.blocking;
     other.blockType = this.blockType;
@@ -290,6 +300,10 @@ class Evaluator {
     this.childCount++;
     
     return other;
+  }
+  
+  run() {
+    while (!(this.blocking || this.halt)) this.step();
   }
   
   step() {
@@ -323,7 +337,7 @@ class Evaluator {
       case "-":
         this.i_write        (this.pop(),this.pop()); break;
       case "*":
-        this.i_newChannel   (this.pop(),this.pop()); break;
+        this.i_newChannel   (this.pop()); break;
       case "*:":
         this.i_alias        (this.pop(),this.pop()); break;
       case "(":
@@ -549,29 +563,44 @@ class MiniPi {
     this.program = program;
     this.channels = [];
     this.evaluators = [];
+    this.inQueue = [];
+    this.inReads = [];
+    this.onOutput = function(val) {};
     this.specialChannels = Object.create(null);
+    this.deferChannelCleanup = false;
     
     var that = this;
     
     let inputCh = new AbstractChannel(this);
     inputCh.read = function(reader) {
-      let val = +window.prompt("Input number")
-      let ch = new AbstractChannel(that);
-      ch.val = val;
-      reader.onRead(ch);
+      if (that.inQueue.length > 0) {
+        let val = that.inQueue.shift();
+        let ch = new ConstantChannel(that, val);
+        reader.onRead(ch);
+      } else {
+        that.inReads.push(reader);
+      }
     }
     this.specialChannels['i'] = inputCh
     
     let outputCh = new AbstractChannel(this);
     outputCh.write = function(val,writer) {
       console.log(val.val);
+      that.onOutput(val.val);
       writer.onWrite();
     }
     this.specialChannels['o'] = outputCh
     
     this.specialChannels['plus']  = new FunctionChannel(this, (x,y) => new ConstantChannel(that,x.val+y.val))
     this.specialChannels['minus'] = new FunctionChannel(this, (x,y) => new ConstantChannel(that,x.val-y.val))
+    this.specialChannels['times'] = new FunctionChannel(this, (x,y) => new ConstantChannel(that,x.val*y.val))
+    this.specialChannels['div']   = new FunctionChannel(this, (x,y) => new ConstantChannel(that,x.val/y.val))
     this.specialChannels['lt']    = new FunctionChannel(this, (x,y) => that.specialChannels[x.val<y.val?'true':'false'])
+    this.specialChannels['le']    = new FunctionChannel(this, (x,y) => that.specialChannels[x.val<=y.val?'true':'false'])
+    this.specialChannels['gt']    = new FunctionChannel(this, (x,y) => that.specialChannels[x.val>y.val?'true':'false'])
+    this.specialChannels['ge']    = new FunctionChannel(this, (x,y) => that.specialChannels[x.val>=y.val?'true':'false'])
+    this.specialChannels['eq']    = new FunctionChannel(this, (x,y) => that.specialChannels[x.val==y.val?'true':'false'])
+    this.specialChannels['ne']    = new FunctionChannel(this, (x,y) => that.specialChannels[x.val!=y.val?'true':'false'])
     this.specialChannels['true']  = new FunctionChannel(this, (x,y) => x)
     this.specialChannels['true'].val = true
     this.specialChannels['false'] = new FunctionChannel(this, (x,y) => y)
@@ -596,16 +625,30 @@ class MiniPi {
     }
   }
   
+  pushInput(val) {
+    if (this.inReads.length > 0) {
+      let reader = this.inReads.pop();
+      let ch = new ConstantChannel(this, val);
+      reader.onRead(ch);
+    } else {
+      this.inQueue.push(val);
+    }
+  }
+  
   stepOne() {
     
   }
   
   stepAll() {
+    this.deferChannelCleanup = true;
     let oldEvaluators = this.evaluators.map(e=>e)
     
     for (let ev of oldEvaluators) {
       ev.step();
     }
+    
+    this.cullChannels();
+    this.deferChannelCleanup = false;
   }
   
   run() {
@@ -629,6 +672,10 @@ class MiniPi {
     if (i > -1) {
       this.evaluators[i].destroy();
       this.evaluators.splice(i,1);
+      
+      if (!this.deferChannelCleanup) {
+        this.cullChannels();
+      }
     }
   }
 }

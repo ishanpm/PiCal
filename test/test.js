@@ -20,11 +20,6 @@ describe('Parser', function() {
       result = parse(source);
       expected = [["!", "a", "b"]]
       assert.deepEqual(result, expected)
-      
-      source = "*a:b";
-      result = parse(source);
-      expected = [["*", "a", "b"]]
-      assert.deepEqual(result, expected)
     });
     
     it('should fill missing arguments with null', function() {
@@ -275,7 +270,7 @@ describe('Postprocessor', function() {
       let result = postprocess(source)
       expect(result).to.deep.equal(['=','a','[[',['&',null,'&',null,'[[*',
         '&','a','{+',
-        '&','b','=','a','+'
+        '&','b','=','a','+',
         '=','b','{-'
       ],'-'])
     })

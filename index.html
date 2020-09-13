@@ -11,22 +11,61 @@
 <body>
 
 <div id="app">
-  <textarea v-model="source" style="width:50em; height:15em;"></textarea><br/>
-  <button v-on:click="doCompile">Compile</button><br><br>
+<pre>
+Quick reference
+Commands:
++x:c                  Read x from c
+!x:c                  Replicated read x from c
+*x                    Create a new channel x
+-x:c                  Write x to c
+(P)                   Fork P
+*x:y                  Alias y as x
+{f -i +o}             Function call shorthand: *io -:f -i:io +o:io
+
+Expressions:
+name                  Channel name (can't start with a number, must match ([\w#$]|"[^"]*"|'[^']*')* )
+number                nth most recently created channel - 0 is most recent
+[P]                   Expression shorthand: Evaluates process and returns last created channel
+[x|P]                 Expression shorthand: Evaluates process and returns channel named x
+[[P]]                 Unevaluated shorthand: [*(!r P -:r)]
+[[*self !io +i -o|P]] Unevaluated w/ signature: [*self(!io +i:io P -o:io)]
+
+Builtins:
+I/O:                  Read from i to input, write to o to output
+literals:             true, false, #number, "string"
+math:                 plus, minus, times, div
+comparison:           lt, le, gt, ge, eq, ne
+</pre>
+  <span>Examples: </span>
+  <select v-model="exampleName">
+    <option v-for="(_,name) of examples">{{name}}</option>
+  </select><br/><br/>
+  <div>
+    <textarea v-model="source" v-on:input="sourceChanged" style="width:50em; height:15em;"></textarea>
+    <textarea v-model="output" ref="outputContainer" style="width:15em; height:15em;"></textarea>
+  </div>
+  <form action="javascript:void 0" v-on:submit="pushInput(inputValue)">
+    <input v-model="inputValue">
+    <input type="submit" value="Send">
+  </form>
+  <button v-on:click="doCompile">Compile</button>
+  <button v-on:click="running = !running">{{running ? "Pause" : "Run"}}</button>
+  <br><br>
   <div v-if="env">
     <button v-on:click="env.stepAll()">Step all</button>
     <ul>
       <li v-for="(ev,evindex) in env.evaluators" v-bind:key="ev.name">
         <h3>{{ev.name}}</h3>
         <button v-on:click="ev.step()">Step</button>
+        <button v-on:click="ev.run()">Run until block</button>
         <div v-if="ev.error">Error: {{ev.error}}</div>
-        <div v-if="ev.blocking">(awaiting {{ev.blockType}})</div>
+        <div v-if="ev.blocking">(awaiting {{ev.blockType}}, {{ev.blocking.refCount}} {{ev.blocking.refCount == 1 ? "ref" : "refs"}})</div>
         <div v-if="ev.halt">(halted)</div>
-        <div>
+        <div class="bytecode">
           <span v-for="(cmd,index) in ev.program"
                 class="bytecode-instr"
                 v-bind:class="{active: index===ev.index, null: cmd===null}"
-          >{{cmd===null ? "&varnothing;" : cmd}}</span>
+          >{{cmd===null ? "&varnothing;" : Array.isArray(cmd) ? "[...]" : cmd}}</span>
         </div>
       </li>
     </li>
